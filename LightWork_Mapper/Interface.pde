@@ -48,7 +48,8 @@ public class Interface {
   byte                 artnetPacket[];
   int                  numArtnetChannels = 3; // Channels per ArtNet fixture
   int                  numArtnetFixtures = 16; // Number of ArtNet DMX fixtures (each one can have multiple channels and LEDs)
-  int                  numArtnetUniverses = 1; // Currently only one universe is supported
+  int                  numArtnetUniverses = 1; // Set in populateLeds
+  int                  dmxUniverseSize = 512; // Could be used to implement short universes.
 
   boolean              isConnected =false;
   boolean              scraperActive = true;
@@ -65,7 +66,8 @@ public class Interface {
 
   //sACN objects
   sACNSource source;
-  sACNUniverse universe1;
+  // sACNUniverse universe1;
+  ArrayList<sACNUniverse> sacnUniverses = new ArrayList<sACNUniverse>();
 
   //OSC objects
   OscP5 oscP5;
@@ -259,6 +261,8 @@ public class Interface {
     }
 
     numLeds = leds.size();
+    numArtnetUniverses = (int) Math.ceil( val * numArtnetChannels / dmxUniverseSize );
+
   }
 
   //set up OSC here to make constructors cleaner
@@ -338,43 +342,75 @@ public class Interface {
 
     case SACN:
       {
-        // Grab all the colors
-        for (int i = 0; i < colors.length; i++) {
-          // Extract RGB values
-          // We assume the first three channels are RGB, and the rest is WHITE.
-          int r = (colors[i] >> 16) & 0xFF;  // Faster way of getting red(argb)
-          int g = (colors[i] >> 8) & 0xFF;   // Faster way of getting green(argb)
-          int b = colors[i] & 0xFF;          // Faster way of getting blue(argb)
+        int colorIndex = 0;
 
-          // Write RGB values to the packet
-          int index = i*numArtnetChannels; 
-          artnetPacket[index]   = byte(r); // Red
-          artnetPacket[index+1] = byte(g); // Green
-          artnetPacket[index+2] = byte(b); // Blue
+        // Iterate by dmx address rather than color.
+        for (int universe = 0; universe < numArtnetUniverses; universe ++ ) {
+          int offset = universe * dmxUniverseSize;
+          int length = Math.min( dmxUniverseSize, colors.length * numArtnetChannels - offset );
+          int channel = 0;
+          int index = 0;
+          for ( ; index < length; index ++ ) {
+            int value;
+            switch ( channel ) {
+              case 0: value = (colors[colorIndex] >> 16) & 0xFF;  break; // Faster way of getting red(argb)
+              case 1: value = (colors[colorIndex] >> 8) & 0xFF;  break; // Faster way of getting green(argb)
+              case 2: value = colors[colorIndex] & 0xFF;  break; // Faster way of getting blue(argb)
+              default:
+                // Populate remaining channels (presumably W) with color brightness
+                value = (int) brightness(colors[colorIndex]);
+            }
 
-          // Populate remaining channels (presumably W) with color brightness
-          for (int j = 3; j < numArtnetChannels; j++) {
-            int br = int(brightness(colors[i]));
-            artnetPacket[index+j] = byte(br); // White
+            artnetPacket[index]   = byte(value); 
+
+            // Loop through channels
+            channel ++;
+            if ( channel == numArtnetChannels ) {
+              channel = 0;
+              colorIndex ++;
+            }
+          }
+          
+          //fill rest of universe with 0's
+          for (; index < 512; index++) {
+            artnetPacket[index]=0;
+          }
+
+          // for (int i = 0; i < colors.length; i++) {
+          //   // Extract RGB values
+          //   // We assume the first three channels are RGB, and the rest is WHITE.
+          //   int r = 
+          //   int g = (colors[i] >> 8) & 0xFF;   // Faster way of getting green(argb)
+          //   int b = colors[i] & 0xFF;          // Faster way of getting blue(argb)
+
+          //   // Write RGB values to the packet
+          //   int index = i*numArtnetChannels; 
+          //   artnetPacket[index]   = byte(r); // Red
+          //   artnetPacket[index+1] = byte(g); // Green
+          //   artnetPacket[index+2] = byte(b); // Blue
+
+          //   
+          //   for (int j = 3; j < numArtnetChannels; j++) {
+          //     int br = int(brightness(colors[i]));
+          //     artnetPacket[index+j] = byte(br); // White
+          //   }
+          // }
+
+
+
+          //slots can add channel offset to the beginning of the packet
+          sACNUniverse universeOb = sacnUniverses.get( universe );
+          println( "Sending universe "+universe );
+          universeOb.setSlots(0, artnetPacket);
+
+          try {
+            universeOb.sendData();
+          } 
+          catch (Exception e) {
+            e.printStackTrace();
+            exit();
           }
         }
-
-        //fill rest of universe with 0's
-        for (int i = numArtnetChannels*numArtnetFixtures; i < 512; i++) {
-          artnetPacket[i]=0;
-        }
-
-        //slots can add channel offset to the beginning of the packet
-        universe1.setSlots(0, artnetPacket);
-
-        try {
-          universe1.sendData();
-        } 
-        catch (Exception e) {
-          e.printStackTrace();
-          exit();
-        }
-
         break;
       }
 
@@ -499,7 +535,11 @@ public class Interface {
       artnetPacket = new byte[numArtnetChannels*numArtnetFixtures];
     } else if (mode == device.SACN) {
       source = new sACNSource(parent, "LightWork");
-      universe1 = new sACNUniverse(source, (short)1); // Just one universe for now
+      sacnUniverses.clear();
+      for ( int index = 0; index < numArtnetUniverses; index ++ ) {
+        println( "Adding universe "+ (short)( index + 1 ));
+        sacnUniverses.add( new sACNUniverse( source, (short)( index + 1 ) ) );
+      }
       isConnected = true; 
       //artnetPacket = new byte[numArtnetChannels*numArtnetFixtures]; 
       artnetPacket = new byte[512]; //size for full universe, helps make sure additional addresses get 0 values
@@ -524,7 +564,7 @@ public class Interface {
     }
     if (mode==device.SACN) {
       source = null;
-      universe1 = null;
+      sacnUniverses.clear();
       isConnected = false;
     }
     if (mode==device.NULL) {
