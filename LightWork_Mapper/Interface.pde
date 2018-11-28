@@ -332,6 +332,8 @@ public class Interface {
         }
 
         artnet.broadcast(artnetPacket);
+
+        break;
       }
 
     case SACN:
@@ -372,10 +374,13 @@ public class Interface {
           e.printStackTrace();
           exit();
         }
+
+        break;
       }
 
     case NULL: 
       {
+        break;
       }
     };
   }
