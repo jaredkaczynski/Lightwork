@@ -261,7 +261,7 @@ public class Interface {
     }
 
     numLeds = leds.size();
-    numArtnetUniverses = (int) Math.ceil( val * numArtnetChannels / dmxUniverseSize );
+    numArtnetUniverses = (int) Math.ceil( val * numArtnetChannels / (double) dmxUniverseSize );
 
   }
 
@@ -340,79 +340,58 @@ public class Interface {
         break;
       }
 
-    case SACN:
-      {
-        int colorIndex = 0;
+    case SACN: {
+        byte[] fakeArtnetPacket = new byte[numArtnetChannels * numArtnetFixtures];
+        byte[][] fakeArtnet2d = new byte[numArtnetUniverses][512];
+        for (int i = 0; i < colors.length; i++) {
+            // Extract RGB values
+            // We assume the first three channels are RGB, and the rest is WHITE.
+            int r = (colors[i] >> 16) & 0xFF;  // Faster way of getting red(argb)
+            int g = (colors[i] >> 8) & 0xFF;   // Faster way of getting green(argb)
+            int b = colors[i] & 0xFF;          // Faster way of getting blue(argb)
+
+            // Write RGB values to the packet
+            int index = i * numArtnetChannels;
+            fakeArtnetPacket[index] = PApplet.parseByte(r); // Red
+            fakeArtnetPacket[index + 1] = PApplet.parseByte(g); // Green
+            fakeArtnetPacket[index + 2] = PApplet.parseByte(b); // Blue
+
+            // Populate remaining channels (presumably W) with color brightness
+            for (int j = 0; j < numArtnetChannels; j++) {
+                int br = PApplet.parseInt(brightness(colors[i]));
+                fakeArtnetPacket[index + j] = PApplet.parseByte(br); // White
+                fakeArtnet2d[(int) Math.floor((index+j) / 512.0)][(index + j)% 512] = fakeArtnetPacket[index + j];
+            }
+        }
+
 
         // Iterate by dmx address rather than color.
-        for (int universe = 0; universe < numArtnetUniverses; universe ++ ) {
-          int offset = universe * dmxUniverseSize;
-          int length = Math.min( dmxUniverseSize, colors.length * numArtnetChannels - offset );
-          int channel = 0;
-          int index = 0;
-          for ( ; index < length; index ++ ) {
-            int value;
-            switch ( channel ) {
-              case 0: value = (colors[colorIndex] >> 16) & 0xFF;  break; // Faster way of getting red(argb)
-              case 1: value = (colors[colorIndex] >> 8) & 0xFF;  break; // Faster way of getting green(argb)
-              case 2: value = colors[colorIndex] & 0xFF;  break; // Faster way of getting blue(argb)
-              default:
-                // Populate remaining channels (presumably W) with color brightness
-                value = (int) brightness(colors[colorIndex]);
+        for (int universe = 0; universe < numArtnetUniverses; universe++) {
+            int offset = universe * dmxUniverseSize;
+            int length = Math.min(dmxUniverseSize, colors.length * numArtnetChannels - offset);
+            int index = 0;
+            for (; index < length; index++) {
+                artnetPacket[index] = fakeArtnet2d[universe][index];
             }
 
-            artnetPacket[index]   = byte(value); 
-
-            // Loop through channels
-            channel ++;
-            if ( channel == numArtnetChannels ) {
-              channel = 0;
-              colorIndex ++;
+            //fill rest of universe with 0's
+            for (; index < 512; index++) {
+                artnetPacket[index] = 0;
             }
-          }
-          
-          //fill rest of universe with 0's
-          for (; index < 512; index++) {
-            artnetPacket[index]=0;
-          }
 
-          // for (int i = 0; i < colors.length; i++) {
-          //   // Extract RGB values
-          //   // We assume the first three channels are RGB, and the rest is WHITE.
-          //   int r = 
-          //   int g = (colors[i] >> 8) & 0xFF;   // Faster way of getting green(argb)
-          //   int b = colors[i] & 0xFF;          // Faster way of getting blue(argb)
+            //slots can add channel offset to the beginning of the packet
+            sACNUniverse universeOb = sacnUniverses.get(universe);
+            universeOb.setSlots(0, artnetPacket);
 
-          //   // Write RGB values to the packet
-          //   int index = i*numArtnetChannels; 
-          //   artnetPacket[index]   = byte(r); // Red
-          //   artnetPacket[index+1] = byte(g); // Green
-          //   artnetPacket[index+2] = byte(b); // Blue
-
-          //   
-          //   for (int j = 3; j < numArtnetChannels; j++) {
-          //     int br = int(brightness(colors[i]));
-          //     artnetPacket[index+j] = byte(br); // White
-          //   }
-          // }
-
-
-
-          //slots can add channel offset to the beginning of the packet
-          sACNUniverse universeOb = sacnUniverses.get( universe );
-          println( "Sending universe "+universe );
-          universeOb.setSlots(0, artnetPacket);
-
-          try {
-            universeOb.sendData();
-          } 
-          catch (Exception e) {
-            e.printStackTrace();
-            exit();
-          }
+            try {
+                universeOb.sendData();
+            } catch (Exception e) {
+                e.printStackTrace();
+                exit();
+            }
         }
         break;
-      }
+    }
 
     case NULL: 
       {
